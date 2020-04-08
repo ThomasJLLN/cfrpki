@@ -18,7 +18,7 @@ var (
 )
 
 type RPKI_TAL struct {
-	URI       string
+	URI       []string
 	Algorithm x509.PublicKeyAlgorithm
 	OID       asn1.ObjectIdentifier
 	PublicKey interface{}
@@ -48,7 +48,7 @@ func DeleteLineEnd(line string) string {
 	return line
 }
 
-func CreateTAL(uri string, pubkey interface{}) (*RPKI_TAL, error) {
+func CreateTAL(uri []string, pubkey interface{}) (*RPKI_TAL, error) {
 	var pubkeyc interface{}
 	switch pubkeyt := pubkey.(type) {
 	case *rsa.PublicKey:
@@ -154,32 +154,37 @@ func EncodeTALSize(tal *RPKI_TAL, split int) ([]byte, error) {
 
 func DecodeTAL(data []byte) (*RPKI_TAL, error) {
 	buf := bytes.NewBufferString(string(data))
-	url, err := buf.ReadString('\n')
-	url = DeleteLineEnd(url)
-	if err != nil {
-		return nil, err
-	}
-	b, err := buf.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-	if b == 0xd {
-		b, err = buf.ReadByte()
+
+	var passedUrl bool
+	var b64 string
+	urls := make([]string, 0)
+	for {
+		line, err := buf.ReadString('\n')
+		if err != nil && err == io.EOF {
+			break
+		}
 		if err != nil {
 			return nil, err
 		}
-	}
+		line = DeleteLineEnd(line)
+		fmt.Printf("LINE %v %d\n", line, len(line))
 
-	b64, err := buf.ReadString('\n')
-	b64 = DeleteLineEnd(b64)
-	for err == nil {
-		var b64tmp string
-		b64tmp, err = buf.ReadString('\n')
-		b64tmp = DeleteLineEnd(b64tmp)
-		b64 += b64tmp
-	}
-	if err != io.EOF {
-		return nil, err
+		if len(line) > 0 && line[0] == 0xd {
+			line = line[1:]
+		}
+
+		if len(line) > 0 && line[0] != '#' && !passedUrl {
+			urls = append(urls, line)
+		}
+
+		if len(line) == 0 {
+			passedUrl = true
+		}
+
+		if len(line) > 0 && passedUrl {
+			b64 += line
+		}
+
 	}
 
 	d, err := base64.StdEncoding.DecodeString(b64)
@@ -201,7 +206,7 @@ func DecodeTAL(data []byte) (*RPKI_TAL, error) {
 	}
 
 	tal := &RPKI_TAL{
-		URI: url,
+		URI: urls,
 		OID: inner.Type.OID,
 	}
 
