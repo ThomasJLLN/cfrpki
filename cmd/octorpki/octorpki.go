@@ -219,6 +219,7 @@ type Stats struct {
 type state struct {
 	Basepath     string
 	Tals         []*pki.PKIFile
+	TalsFetch    map[string]*librpki.RPKI_TAL
 	TalNames     []string
 	UseManifest  bool
 	RsyncBin     string
@@ -326,20 +327,7 @@ func ExtractRsyncDomain(rsync string) (string, error) {
 	}
 }
 
-func (s *state) ReceiveRRDPFileCallback(main string, url string, path string, data []byte, withdraw bool, snapshot bool, serial int64, args ...interface{}) error {
-	rsync, _ := args[0].(string)
-	if s.RRDPMode == RRDP_MATCH_STRICT && !strings.Contains(path, rsync) {
-		log.Errorf("%v is outside directory %v", path, rsync)
-		return nil
-	}
-	if s.RRDPMode == RRDP_MATCH_RSYNC {
-		newDom, err := ExtractRsyncDomain(rsync)
-		if err == nil && !strings.Contains(path, newDom) {
-			log.Errorf("%v is outside directory %v", path, newDom)
-			return nil
-		}
-	}
-
+func (s *state) WriteRsyncFileOnDisk(path string, data []byte, withdraw bool) error {
 	fPath, err := syncpki.GetDownloadPath(path, true)
 	if err != nil {
 		log.Fatal(err)
@@ -358,6 +346,28 @@ func (s *state) ReceiveRRDPFileCallback(main string, url string, path string, da
 	}
 	f.Write(data)
 	f.Close()
+	return nil
+}
+
+func (s *state) ReceiveRRDPFileCallback(main string, url string, path string, data []byte, withdraw bool, snapshot bool, serial int64, args ...interface{}) error {
+	// Note: similar to the TAL, prepare function that will store those in RAM
+	rsync, _ := args[0].(string)
+	if s.RRDPMode == RRDP_MATCH_STRICT && !strings.Contains(path, rsync) {
+		log.Errorf("%v is outside directory %v", path, rsync)
+		return nil
+	}
+	if s.RRDPMode == RRDP_MATCH_RSYNC {
+		newDom, err := ExtractRsyncDomain(rsync)
+		if err == nil && !strings.Contains(path, newDom) {
+			log.Errorf("%v is outside directory %v", path, newDom)
+			return nil
+		}
+	}
+
+	err := s.WriteRsyncFileOnDisk(path, data, withdraw)
+	if err != nil {
+		return err
+	}
 
 	MetricSIACounts.With(
 		prometheus.Labels{
@@ -669,6 +679,95 @@ func FilterDuplicates(roalist []prefixfile.ROAJson) []prefixfile.ROAJson {
 	return roalistNodup
 }
 
+// Fetches RFC8630-type TAL
+func (s *state) MainTAL(pSpan opentracing.Span) {
+	tracer := opentracing.GlobalTracer()
+	span := tracer.StartSpan(
+		"tal",
+		opentracing.ChildOf(pSpan.Context()),
+	)
+
+	for path, tal := range s.TalsFetch {
+		tSpan := tracer.StartSpan(
+			"fetch",
+			opentracing.ChildOf(span.Context()),
+		)
+		tSpan.SetTag("tal", path)
+
+		// Try the multiple URLs a TAL can be hosted on
+		var success bool
+		var successUrl string
+		for _, uri := range tal.URI {
+			if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+				tLogs := []interface{}{"event", "fetch tal", "uri", uri}
+				req, err := http.NewRequest("GET", uri, nil)
+				if err != nil {
+					tLogs = append(tLogs, "error")
+					tLogs = append(tLogs, true)
+					tLogs = append(tLogs, "message")
+					tLogs = append(tLogs, err)
+					tSpan.LogKV(tLogs...)
+					continue
+				}
+				req.Header.Set("User-Agent", s.HTTPFetcher.UserAgent)
+
+				// maybe add a limit in the client? To avoid downloading huge files (that wouldn't be certs)
+				resp, err := s.HTTPFetcher.Client.Do(req)
+				if err != nil {
+					tLogs = append(tLogs, "error")
+					tLogs = append(tLogs, true)
+					tLogs = append(tLogs, "message")
+					tLogs = append(tLogs, err)
+					tSpan.LogKV(tLogs...)
+					continue
+				}
+
+				// check body / status code
+				data, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					tLogs = append(tLogs, "error")
+					tLogs = append(tLogs, true)
+					tLogs = append(tLogs, "message")
+					tLogs = append(tLogs, err)
+					tSpan.LogKV(tLogs...)
+					continue
+				}
+
+				// Plan option to store everything in memory
+				err = s.WriteRsyncFileOnDisk(tal.GetRsyncURI(), data, false)
+				if err != nil {
+					tLogs = append(tLogs, "error")
+					tLogs = append(tLogs, true)
+					tLogs = append(tLogs, "message")
+					tLogs = append(tLogs, err)
+					tSpan.LogKV(tLogs...)
+					continue
+				}
+
+				tSpan.LogKV(tLogs...)
+
+				success = true
+				successUrl = uri
+				break
+
+			}
+		}
+
+		// Fail over to rsync
+		if !success && s.RRDPFailover && tal.HasRsync() {
+			s.RsyncFetch[tal.GetRsyncURI()] = time.Now().UTC()
+		} else {
+			log.Infof("Successfully downloaded root certificate for %s at %s", path, successUrl)
+		}
+
+		fmt.Println(success)
+		
+		tSpan.Finish()
+	}
+
+	defer span.Finish()
+}
+
 func (s *state) MainValidation(pSpan opentracing.Span) {
 	tracer := opentracing.GlobalTracer()
 	span := tracer.StartSpan(
@@ -711,7 +810,6 @@ func (s *state) MainValidation(pSpan opentracing.Span) {
 
 			//log.Warn("Closed errors")
 		}(sm)
-
 		manager[i].AddInitial([]*pki.PKIFile{tal})
 		s.CountExplore = manager[i].Explore(!s.UseManifest, false)
 
@@ -719,7 +817,8 @@ func (s *state) MainValidation(pSpan opentracing.Span) {
 		var count int
 		for _, obj := range manager[i].Validator.TALs {
 			tal := obj.Resource.(*librpki.RPKI_TAL)
-			s.RsyncFetch[tal.URI] = time.Now().UTC()
+			//s.RsyncFetch[tal.GetURI()] = time.Now().UTC()
+			s.TalsFetch[obj.File.Path] = tal
 			count++
 		}
 		for _, obj := range manager[i].Validator.ValidObjects {
@@ -1049,6 +1148,7 @@ func main() {
 	s := &state{
 		Basepath:     *Basepath,
 		Tals:         tals,
+		TalsFetch:    make(map[string]*librpki.RPKI_TAL),
 		TalNames:     talNames,
 		UseManifest:  *UseManifest,
 		RsyncTimeout: timeoutDur,
@@ -1161,10 +1261,23 @@ func main() {
 
 		t1 := time.Now().UTC()
 
+		// HTTPs TAL
+		s.MainTAL(span)
+		s.TalsFetch = make(map[string]*librpki.RPKI_TAL) // clear decoded TAL for next iteration
+
+		t2 := time.Now().UTC()
+		MetricOperationTime.With(
+			prometheus.Labels{
+				"type": "tal",
+			}).
+			Observe(float64(t2.Sub(t1).Seconds()))
+
+		t1 = time.Now().UTC()
+
 		// Rsync
 		s.MainRsync(span)
 
-		t2 := time.Now().UTC()
+		t2 = time.Now().UTC()
 		MetricOperationTime.With(
 			prometheus.Labels{
 				"type": "rsync",
@@ -1189,7 +1302,7 @@ func main() {
 		t1 = time.Now().UTC()
 
 		// Reduce
-		s.Stable = !s.MainReduce()
+		s.Stable = !s.MainReduce() && s.Iteration > 1
 
 		t2 = time.Now().UTC()
 		MetricOperationTime.With(

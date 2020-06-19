@@ -368,7 +368,7 @@ func (v *Validator) InvalidateObject(keyid []byte) {
 }
 
 func (v *Validator) AddTAL(tal *librpki.RPKI_TAL) ([]*PKIFile, *Resource, error) {
-	uri := tal.URI
+	uri := tal.GetRsyncURI()
 	files := []*PKIFile{
 		&PKIFile{
 			Type:  TYPE_CER,
@@ -732,6 +732,7 @@ func (sm *SimpleManager) AddInitial(fileList []*PKIFile) {
 func (sm *SimpleManager) ExploreAdd(file *PKIFile, data *SeekFile, addInvalidChilds bool) {
 	sm.Explored[file.ComputePath()] = true
 	valid, subFiles, res, err := sm.Validator.AddResource(file, data.Data)
+
 	if err != nil {
 		if sm.Log != nil {
 			//sm.Log.Errorf("Error adding Resource %v: %v", file.Path, err)

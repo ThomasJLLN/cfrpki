@@ -24,6 +24,41 @@ type RPKI_TAL struct {
 	PublicKey interface{}
 }
 
+func (tal *RPKI_TAL) HasRsync() bool {
+	for _, url := range tal.URI {
+		if strings.HasPrefix(url, "rsync://") {
+			return true
+		}
+	}
+	return false
+}
+
+// Returns the rsync URL associated with the TAL certificate.
+// If it does not exist (http only), return a made up URI
+func (tal *RPKI_TAL) GetRsyncURI() string {
+	var rsync string
+	var other string
+	for _, url := range tal.URI {
+		if strings.HasPrefix(url, "rsync://") {
+			rsync = url
+			break
+		}
+		other = url
+	}
+	if rsync == "" {
+		rsync = fmt.Sprintf("rsync://rfc8630/%x.cer", sha1.Sum([]byte(other)))
+	}
+	return rsync
+}
+
+func (tal *RPKI_TAL) GetURI() string {
+	uri := "unknown"
+	if len(tal.URI) > 0 {
+		uri = tal.URI[0]
+	}
+	return uri
+}
+
 func (tal *RPKI_TAL) CheckCertificate(cert *x509.Certificate) bool {
 	if tal.Algorithm == cert.PublicKeyAlgorithm {
 		switch tal.Algorithm {
@@ -160,13 +195,15 @@ func DecodeTAL(data []byte) (*RPKI_TAL, error) {
 	for {
 		line, err := buf.ReadString('\n')
 		if err != nil && err == io.EOF {
+			if line != "" {
+				b64 += line
+			}
 			break
 		}
 		if err != nil {
 			return nil, err
 		}
 		line = DeleteLineEnd(line)
-		fmt.Printf("LINE %v %d\n", line, len(line))
 
 		if len(line) > 0 && line[0] == 0xd {
 			line = line[1:]
