@@ -45,6 +45,8 @@ type Resource struct {
 	File     *PKIFile
 	Resource interface{}
 	Childs   []*Resource
+
+	CertTALValid bool // currently used for TALs: indicates the child is valid and does not need to be fetched again
 }
 
 func (res *Resource) GetIdentifier() (bool, []byte) {
@@ -279,6 +281,7 @@ func (v *Validator) AddResource(pkifile *PKIFile, data []byte) (bool, []*PKIFile
 				if !talValidation {
 					return false, nil, nil, errors.New("Certificate was not validated against TAL")
 				}
+				v.TALs[pkifile.Path].CertTALValid = true // indicates that we can skip downloading
 			}
 		}
 

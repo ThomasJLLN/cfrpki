@@ -759,9 +759,7 @@ func (s *state) MainTAL(pSpan opentracing.Span) {
 		} else {
 			log.Infof("Successfully downloaded root certificate for %s at %s", path, successUrl)
 		}
-
-		fmt.Println(success)
-		
+				
 		tSpan.Finish()
 	}
 
@@ -818,7 +816,9 @@ func (s *state) MainValidation(pSpan opentracing.Span) {
 		for _, obj := range manager[i].Validator.TALs {
 			tal := obj.Resource.(*librpki.RPKI_TAL)
 			//s.RsyncFetch[tal.GetURI()] = time.Now().UTC()
-			s.TalsFetch[obj.File.Path] = tal
+			if !obj.CertTALValid {
+				s.TalsFetch[obj.File.Path] = tal
+			}
 			count++
 		}
 		for _, obj := range manager[i].Validator.ValidObjects {
