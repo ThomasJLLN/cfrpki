@@ -5,6 +5,11 @@ This document covers basic monitoring and health of the toolings
 (OctoRPKI and GoRTR) but also advanced features like distributed tracing
 and extended logging systems.
 
+While all the tools are optional, we recommend to setup mininmal
+monitoring with Prometheus.
+The sections below will go from a simple general use-case to
+more specific, development-centric data.
+
 You can usually find the tools listed here in use inside many tech companies.
 While it may feel superfluous and complex to set them up _just_
 for the use of RPKI, it may be fruitful to reach out to development-focused
@@ -14,11 +19,11 @@ A quick note on the Cloudflare RPKI Dashboard and API as it also
 fits in the *monitoring* part of RPKI.
 A custom version of OctoRPKI is providing the data behind
 [rpki.cloudflare.com](https://rpki.cloudflare.com) and its GraphQL API.
-This includes fingerprints, file-specific information, historical data
+It includes fingerprints, file-specific information, historical data
 and also validation status of the BGP data collected.
-Unfortunately, the setup is too specific to Cloudflare to be released and made open-source.
-Some work is being done in that direction to provide a limited feature-set
-dashboard that is plug and play.
+Unfortunately, the setup is too specific to Cloudflare to be made open-source.
+Work is being done in that direction to provide a limited feature-set plug and play
+dashboard. A section will be added later on.
 
 ## Play with docker-compose
 
@@ -87,8 +92,8 @@ When a validation error happens, information like file path and certificate key 
 added to the log before being sent to Sentry.
 
 By passing the environment variable `SENTRY_DSN=https://<key>@<organization>.<server>/<project>`,
-or the CLI argument `-sentry.dsn https://...` OctoRPKI will connect to Sentry and log its messages.
-It will also include validation failures and fetching informmation (RRDP, rsync).
+or the CLI argument `-sentry.dsn https://...` OctoRPKI will connect to the Sentry instance and send its messages.
+It alsos include validation failures and fetching informmation (RRDP, rsync).
 
 <p align="center">
   <img src="resources/monitoring_sentry_1.png" alt="OctoRPKI Sentry Dashboard Events List" width="600px"/>
