@@ -159,8 +159,8 @@ $ go tool pprof -http :8084 http://localhost:8081/debug/pprof/profile
 ```
 
 <p align="center">
-  <img src="resources/monitoring_pprof1.png" alt="OctoRPKI Pprof Heap Memory Graph" width="600px"/>
+  <img src="resources/monitoring_pprof_1.png" alt="OctoRPKI Pprof Heap Memory Graph" width="600px"/>
 </p>
 <p align="center">
-  <img src="resources/monitoring_pprof2.png" alt="OctoRPKI Pprof CPU Flame Graph" width="600px"/>
+  <img src="resources/monitoring_pprof_2.png" alt="OctoRPKI Pprof CPU Flame Graph" width="600px"/>
 </p>
