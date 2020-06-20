@@ -46,7 +46,7 @@ func (tal *RPKI_TAL) GetRsyncURI() string {
 		other = url
 	}
 	if rsync == "" {
-		rsync = fmt.Sprintf("rsync://rfc8630/%x.cer", sha1.Sum([]byte(other)))
+		rsync = fmt.Sprintf("rsync://rfc8630/certs/%x.cer", sha1.Sum([]byte(other)))
 	}
 	return rsync
 }

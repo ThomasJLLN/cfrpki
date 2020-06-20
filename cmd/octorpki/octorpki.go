@@ -697,8 +697,19 @@ func (s *state) MainTAL(pSpan opentracing.Span) {
 		// Try the multiple URLs a TAL can be hosted on
 		var success bool
 		var successUrl string
+
+		sHub := sentry.CurrentHub().Clone()
+
+		fmt.Printf("TEST %v\n", tal.URI)
+
 		for _, uri := range tal.URI {
 			if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+
+				sHub.ConfigureScope(func(scope *sentry.Scope) {
+					scope.SetTag("tal.uri", uri)
+					scope.SetTag("tal.path", path)
+				})
+
 				tLogs := []interface{}{"event", "fetch tal", "uri", uri}
 				req, err := http.NewRequest("GET", uri, nil)
 				if err != nil {
@@ -707,9 +718,19 @@ func (s *state) MainTAL(pSpan opentracing.Span) {
 					tLogs = append(tLogs, "message")
 					tLogs = append(tLogs, err)
 					tSpan.LogKV(tLogs...)
+					log.Errorf("error while trying to fetch: %s: %v", uri, err)
 					continue
 				}
 				req.Header.Set("User-Agent", s.HTTPFetcher.UserAgent)
+
+				sHub.ConfigureScope(func(scope *sentry.Scope) {
+					scope.SetRequest(req)
+				})
+
+				sbc := &sentry.Breadcrumb{
+					Message:  fmt.Sprintf("GET | %s", uri),
+					Category: "http",
+				}
 
 				// maybe add a limit in the client? To avoid downloading huge files (that wouldn't be certs)
 				resp, err := s.HTTPFetcher.Client.Do(req)
@@ -719,8 +740,27 @@ func (s *state) MainTAL(pSpan opentracing.Span) {
 					tLogs = append(tLogs, "message")
 					tLogs = append(tLogs, err)
 					tSpan.LogKV(tLogs...)
+
+					sbc.Level = sentry.LevelError
+					sHub.AddBreadcrumb(sbc, nil)
+					log.Errorf("error while trying to fetch: %s: %v", uri, err)
+					sHub.CaptureException(err)
 					continue
 				}
+
+				if resp.StatusCode != 200 {
+					sHub.ConfigureScope(func(scope *sentry.Scope) {
+						scope.SetLevel(sentry.LevelError)
+					})
+					sbc.Level = sentry.LevelError
+					sHub.AddBreadcrumb(sbc, nil)
+					log.Errorf("http server replied: %s while trying to fetch", resp.Status, uri)
+					sHub.CaptureMessage(fmt.Sprintf("http server replied: %s", resp.Status))
+					continue
+				}
+
+				sHub.AddBreadcrumb(sbc, nil)
+
 
 				// check body / status code
 				data, err := ioutil.ReadAll(resp.Body)
@@ -730,6 +770,8 @@ func (s *state) MainTAL(pSpan opentracing.Span) {
 					tLogs = append(tLogs, "message")
 					tLogs = append(tLogs, err)
 					tSpan.LogKV(tLogs...)
+					log.Errorf("error while trying to fetch: %s: %v", uri, err)
+					sHub.CaptureException(err)
 					continue
 				}
 
@@ -741,10 +783,17 @@ func (s *state) MainTAL(pSpan opentracing.Span) {
 					tLogs = append(tLogs, "message")
 					tLogs = append(tLogs, err)
 					tSpan.LogKV(tLogs...)
+					log.Errorf("error while trying to fetch: %s: %v", uri, err)
+					sHub.CaptureException(err)
 					continue
 				}
 
 				tSpan.LogKV(tLogs...)
+
+				sHub.WithScope(func(scope *sentry.Scope) {
+					scope.SetLevel(sentry.LevelInfo)
+					sHub.CaptureMessage("fetched http tal successfully")
+				})
 
 				success = true
 				successUrl = uri
@@ -755,9 +804,13 @@ func (s *state) MainTAL(pSpan opentracing.Span) {
 
 		// Fail over to rsync
 		if !success && s.RRDPFailover && tal.HasRsync() {
-			s.RsyncFetch[tal.GetRsyncURI()] = time.Now().UTC()
-		} else {
+			rsync := tal.GetRsyncURI()
+			log.Infof("Root certificate for %s will be downloaded using rsync: %s", path, rsync)
+			s.RsyncFetch[rsync] = time.Now().UTC()
+		} else if success {
 			log.Infof("Successfully downloaded root certificate for %s at %s", path, successUrl)
+		} else {
+			log.Errorf("Could not download root certificate for %s", path)
 		}
 				
 		tSpan.Finish()
