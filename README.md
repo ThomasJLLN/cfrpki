@@ -181,6 +181,10 @@ To disable signing, use the following flag on OctoRPKI `-output.sign=false` and 
 
 The [repository's page](https://github.com/cloudflare/gortr) gives more details on how to configure network devices to use GoRTR.
 
+## Monitor
+
+Check [Monitoring.md](Monitoring.md) page to see how you can setup dashboards, distributed tracing and error logging.
+
 ## Develop
 
 ### Libraries
